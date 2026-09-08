@@ -755,12 +755,16 @@ class Game {
   layout() {
     const { width: w, height: h } = this.r;
     const portrait = this.r.portrait;
-    this.cam.zoom = portrait ? w / VIEW.portraitViewW : h / VIEW.landscapeViewH;
-    const viewH = h / this.cam.zoom;
-    const anchor = portrait ? VIEW.waterAnchorPortrait : VIEW.waterAnchorLandscape;
-    this.cam.y = WORLD.waterY - anchor * viewH;
+    // The panel sizes itself to its contents, so lay it out first and frame the
+    // river inside whatever room is left.
     this.ui.layout(w, h, portrait);
     this.hud.layout(w, h, portrait);
+
+    this.cam.zoom = portrait ? w / VIEW.portraitViewW : h / VIEW.landscapeViewH;
+    const waterScreenY = portrait
+      ? this.ui.panel.y * VIEW.waterAnchorPortrait
+      : h * VIEW.waterAnchorLandscape;
+    this.cam.y = WORLD.waterY - waterScreenY / this.cam.zoom;
   }
 
   _camTargetX() {
@@ -1949,7 +1953,7 @@ class Stones {
 
 __m["game/UI.js"] = function (exports) {
 const {roundRect, nineSlice} = __req("engine/Renderer.js");
-const {COLORS, DIFFICULTIES, fmtBet, fmtMoney} = __req("game/config.js");
+const {COLORS, DIFFICULTIES, fmtBet, fmtMoney, fmtMult, multiplierFor} = __req("game/config.js");
 
 const FONT = 'system-ui, "Trebuchet MS", "Segoe UI", sans-serif';
 
@@ -2005,31 +2009,48 @@ class UI {
     });
   }
 
+  /**
+   * Portrait sizes the panel to its contents rather than claiming a fixed share
+   * of the screen — on a short phone that difference is the whole scene.
+   * Rows top to bottom: bet, difficulty, a live status strip, then the buttons.
+   */
   _layoutPortrait(w, h) {
-    const panelH = Math.max(300, Math.min(h * 0.44, h - 320));
-    const u = Math.min(w / 754, panelH / 556);
+    const u = Math.max(0.62, Math.min(w / 420, h / 760, 1.5));
+    const pad = 18 * u, gap = 11 * u;
+    const rowH = 52 * u, statH = 40 * u, btnH = 88 * u;
+
+    let panelH = pad * 2 + rowH * 2 + statH + btnH + gap * 3.4;
+    panelH = Math.min(panelH, h * 0.48);
     const panelY = h - panelH;
-    this.panel = { x: 10 * u, y: panelY, w: w - 20 * u, h: panelH + 20 * u };
-    this.underlay = { x: 0, y: panelY - 8 * u, w, h: panelH + 8 * u };
+
+    this.panel = { x: 8 * u, y: panelY, w: w - 16 * u, h: panelH + 20 * u };
+    this.underlay = { x: 0, y: panelY - 7 * u, w, h: panelH + 7 * u };
     this.u = u;
 
-    const pad = 30 * u;
-    const rowH = 84 * u;
-    const betY = panelY + 40 * u;
-    this.rects.bet = { x: pad, y: betY, w: w - pad * 2, h: rowH };
-    this.rects.betMin = { x: pad + 8 * u, y: betY + 6 * u, w: 146 * u, h: rowH - 12 * u };
-    this.rects.betMax = { x: w - pad - 8 * u - 146 * u, y: betY + 6 * u, w: 146 * u, h: rowH - 12 * u };
-    this.rects.betPlus = { x: w / 2 - 60 * u, y: betY, w: 120 * u, h: rowH };
+    const x = pad, innerW = w - pad * 2;
+    let y = panelY + pad;
 
-    const diffY = betY + rowH + 38 * u;
-    this.rects.diffCycle = { x: pad, y: diffY, w: w - pad * 2, h: 98 * u };
+    this.rects.bet = { x, y, w: innerW, h: rowH };
+    const sideW = Math.min(120 * u, innerW * 0.3);
+    this.rects.betMin = { x: x + 6 * u, y: y + 5 * u, w: sideW, h: rowH - 10 * u };
+    this.rects.betMax = { x: x + innerW - 6 * u - sideW, y: y + 5 * u, w: sideW, h: rowH - 10 * u };
+    this.rects.betPlus = { x: w / 2 - 55 * u, y, w: 110 * u, h: rowH };
+    y += rowH + gap;
 
-    const goH = 180 * u;
-    const goY = h - goH - 64 * u;
-    const goW = Math.min(322 * u, w * 0.46);
-    this.rects.go = { x: w - pad - goW, y: goY, w: goW, h: goH };
-    const cr = 86 * u;
-    this.rects.collect = { x: pad + 24 * u, y: goY + goH / 2 - cr, w: cr * 2, h: cr * 2 };
+    this.rects.diffCycle = { x, y, w: innerW, h: rowH };
+    y += rowH + gap;
+
+    this.stat = { x, y, w: innerW, h: statH };
+    y += statH + gap * 1.4;
+
+    const goW = innerW * 0.56;
+    const goX = x + innerW - goW;
+    this.rects.go = { x: goX, y, w: goW, h: btnH };
+    const cr = Math.min(btnH / 2, (goX - x - 14 * u) / 2);
+    this.rects.collect = {
+      x: x + (goX - x - 14 * u) / 2 - cr + 7 * u,
+      y: y + btnH / 2 - cr, w: cr * 2, h: cr * 2,
+    };
   }
 
   /** Returns an action id (or null) for this frame. */
@@ -2089,25 +2110,70 @@ class UI {
   }
 
   _drawPortrait(ctx, game, u) {
-    this._slot(ctx, this.rects.bet, 16 * u);
+    this._slot(ctx, this.rects.bet, 14 * u);
     this._pillButton(ctx, this.rects.betMin, 'MIN', u, game.canChangeBet);
     this._pillButton(ctx, this.rects.betMax, 'MAX', u, game.canChangeBet);
-    this._centeredText(ctx, this.rects.bet, fmtBet(game.bet), 34 * u,
+    this._centeredText(ctx, this.rects.bet, fmtBet(game.bet), 28 * u,
       game.canChangeBet ? COLORS.text : COLORS.textDim);
 
     const r = this.rects.diffCycle;
-    this._slot(ctx, r, 16 * u);
+    this._slot(ctx, r, 14 * u);
     ctx.save();
-    ctx.font = `800 ${30 * u}px ${FONT}`;
+    ctx.font = `800 ${25 * u}px ${FONT}`;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = game.canChangeBet ? COLORS.text : COLORS.textDim;
-    ctx.fillText(game.difficulty.label.toUpperCase(), r.x + 34 * u, r.y + r.h / 2);
+    ctx.fillText(game.difficulty.label.toUpperCase(), r.x + 26 * u, r.y + r.h / 2);
     ctx.restore();
-    this._chevron(ctx, r.x + r.w - 44 * u, r.y + r.h / 2, 13 * u, u);
+    this._chevron(ctx, r.x + r.w - 32 * u, r.y + r.h / 2, 12 * u, u);
 
+    this._statStrip(ctx, game, u);
     this._roundButton(ctx, this.rects.collect, game, u);
     this._bigButton(ctx, this.rects.go, 'go', game, u);
+  }
+
+  /**
+   * The strip between the settings and the buttons. Landscape shows this state
+   * on the collect button and in the ribbons on the water; portrait has neither
+   * the width nor the visible river for it, so it reads out here instead —
+   * how far across, what the ladder is worth, what cashing out pays.
+   */
+  _statStrip(ctx, game, u) {
+    const r = this.stat;
+    const live = game.step > 0;
+    const total = Number.isFinite(game.stoneCount) ? game.stoneCount + 1 : '∞';
+    const cells = live
+      ? [['STEP', `${game.step} / ${total}`, COLORS.text],
+         ['MULTIPLIER', fmtMult(game.multiplier), COLORS.gold],
+         ['CASH OUT', `${fmtMoney(game.cashoutValue)} USD`, '#8ce07a']]
+      : [['BET', `${fmtMoney(game.bet)} USD`, COLORS.text],
+         ['CROSSING', `${total} steps`, COLORS.text],
+         ['FIRST STEP', fmtMult(multiplierFor(game.difficulty, 1)), COLORS.gold]];
+
+    ctx.save();
+    ctx.textAlign = 'center';
+    const cw = r.w / 3;
+    cells.forEach(([label, value, color], i) => {
+      const cx = r.x + cw * (i + 0.5);
+      if (i) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(r.x + cw * i, r.y + r.h * 0.18);
+        ctx.lineTo(r.x + cw * i, r.y + r.h * 0.82);
+        ctx.stroke();
+      }
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = COLORS.textDim;
+      ctx.font = `700 ${10.5 * u}px ${FONT}`;
+      ctx.letterSpacing = `${0.9 * u}px`;
+      ctx.fillText(label, cx, r.y + r.h * 0.38);
+      ctx.letterSpacing = '0px';
+      ctx.fillStyle = color;
+      ctx.font = `800 ${this._fitFont(ctx, value, cw - 12 * u, 19 * u)}px ${FONT}`;
+      ctx.fillText(value, cx, r.y + r.h * 0.88);
+    });
+    ctx.restore();
   }
 
   _slot(ctx, r, radius, active = false) {
@@ -2222,58 +2288,48 @@ class UI {
     ctx.restore();
   }
 
-  /** Portrait's circular secondary button: collect when live, replay when idle. */
+  /**
+   * Portrait's circular cash-out button. It used to show a replay arrow when
+   * idle, which read as a second "start" control sitting next to GO — so it now
+   * says plainly what it is and that there is nothing to take yet.
+   */
   _roundButton(ctx, r, game, u) {
     const cx = r.x + r.w / 2, cy = r.y + r.h / 2, rad = r.w / 2;
     const enabled = game.canCollect;
     const pressed = this.pressedId === 'collect' && this.hoverId === 'collect';
     ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+    ctx.save();
+    ctx.clip();
+    const key = !enabled ? 'collectInactive'
+      : pressed ? 'collectPressed'
+      : this.hoverId === 'collect' ? 'collectHover' : 'collectNormal';
+    const img = this.L.img(key);
+    const s = (rad * 2) / img.height * 1.04;
+    ctx.drawImage(img, cx - img.width * s / 2, cy - img.height * s / 2,
+      img.width * s, img.height * s);
+    ctx.restore();
+    ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = enabled ? '#ffffff' : 'rgba(255,255,255,0.55)';
+    ctx.font = `700 ${rad * 0.23}px ${FONT}`;
+    ctx.letterSpacing = `${rad * 0.02}px`;
+    ctx.fillText('CASH OUT', cx, cy - rad * 0.36);
+    ctx.letterSpacing = '0px';
     if (enabled) {
-      const key = pressed ? 'collectPressed' : (this.hoverId === 'collect' ? 'collectHover' : 'collectNormal');
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(cx, cy, rad, 0, Math.PI * 2);
-      ctx.clip();
-      const img = this.L.img(key);
-      const s = (rad * 2) / img.height * 1.02;
-      ctx.drawImage(img, cx - img.width * s / 2, cy - img.height * s / 2, img.width * s, img.height * s);
-      ctx.restore();
-      ctx.fillStyle = '#fff';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
       const label = fmtMoney(game.cashoutValue);
       ctx.font = `800 ${this._fitFont(ctx, label, rad * 1.5, rad * 0.42)}px ${FONT}`;
-      ctx.fillText(label, cx, cy - rad * 0.1);
-      ctx.font = `700 ${rad * 0.24}px ${FONT}`;
-      ctx.fillText('USD', cx, cy + rad * 0.34);
+      ctx.fillText(label, cx, cy + rad * 0.06);
+      ctx.font = `700 ${rad * 0.22}px ${FONT}`;
+      ctx.fillText('USD', cx, cy + rad * 0.45);
     } else {
-      // Replay glyph: a broken ring with an arrow head, play triangle inside.
-      ctx.strokeStyle = 'rgba(255,255,255,0.82)';
-      ctx.lineWidth = rad * 0.13;
-      ctx.lineCap = 'round';
-      const R = rad * 0.68;
-      const a0 = Math.PI * 0.72, a1 = Math.PI * 2.28;
-      ctx.beginPath();
-      ctx.arc(cx, cy, R, a0, a1);
-      ctx.stroke();
-      // arrow head at the open end of the ring, pointing along the sweep
-      const hx = cx + Math.cos(a0) * R, hy = cy + Math.sin(a0) * R;
-      const tang = a0 - Math.PI / 2;
-      const hs = rad * 0.24;
-      ctx.beginPath();
-      ctx.moveTo(hx + Math.cos(tang) * hs, hy + Math.sin(tang) * hs);
-      ctx.lineTo(hx + Math.cos(tang + 2.4) * hs, hy + Math.sin(tang + 2.4) * hs);
-      ctx.lineTo(hx + Math.cos(tang - 2.4) * hs, hy + Math.sin(tang - 2.4) * hs);
-      ctx.closePath();
-      ctx.fillStyle = 'rgba(255,255,255,0.82)';
-      ctx.fill();
-      // play triangle
-      ctx.beginPath();
-      ctx.moveTo(cx - rad * 0.13, cy - rad * 0.23);
-      ctx.lineTo(cx + rad * 0.27, cy);
-      ctx.lineTo(cx - rad * 0.13, cy + rad * 0.23);
-      ctx.closePath();
-      ctx.fill();
+      ctx.font = `800 ${rad * 0.46}px ${FONT}`;
+      ctx.fillText('—', cx, cy + rad * 0.14);
     }
     ctx.restore();
   }
@@ -2340,11 +2396,14 @@ const WORLD = {
 const VIEW = {
   /** Landscape: fit 750 world units of height on screen (the mockup framing). */
   landscapeViewH: 750,
-  /** Portrait: fit this many world units of width — a tighter, taller crop. */
-  portraitViewW: 640,
-  /** Where the waterline sits, as a fraction of the scene height. */
+  /** Portrait: fit this many world units of width — a tighter, taller crop that
+   *  keeps the horse about a third of the scene's height, as in the mockup. */
+  portraitViewW: 545,
+  /** Where the waterline sits. Landscape measures against the whole canvas (the
+   *  panel floats over the scene); portrait measures against the scene area
+   *  above the panel, so the framing holds however tall the controls end up. */
   waterAnchorLandscape: 0.677,
-  waterAnchorPortrait: 0.44,
+  waterAnchorPortrait: 0.81,
   /** Keep the horse around here horizontally before the camera starts to pan. */
   horseAnchor: 0.30,
 };
