@@ -413,10 +413,15 @@ function roundRect(ctx, x, y, w, h, r) {
 }
 
 /**
- * 9-slice a panel texture into an arbitrary rectangle: corners keep their size,
+ * 9-slice a texture into an arbitrary rectangle: corners keep their shape,
  * edges stretch along one axis, the middle stretches both ways.
+ *
+ * `scale` resizes the corners on the way out. Panels want 1 — their corner art
+ * is authored at the size it is drawn. A button drawn much smaller than its
+ * artwork wants the corners scaled to match, or a rounded rect ends up with a
+ * radius far too big for it. Corners never take more than the rectangle has.
  */
-function nineSlice(ctx, img, x, y, w, h, inset) {
+function nineSlice(ctx, img, x, y, w, h, inset, scale = 1) {
   if (!(w > 0) || !(h > 0)) return;
   const { left = inset, right = inset, top = inset, bottom = inset } =
     typeof inset === 'number' ? {} : inset;
@@ -425,25 +430,28 @@ function nineSlice(ctx, img, x, y, w, h, inset) {
   const t = typeof inset === 'number' ? inset : top;
   const b = typeof inset === 'number' ? inset : bottom;
 
+  const k = Math.min(scale, w / Math.max(1e-6, l + r), h / Math.max(1e-6, t + b));
+  const dl = l * k, dr = r * k, dt = t * k, db = b * k;
+
   const iw = img.width, ih = img.height;
   const cw = Math.max(0, iw - l - r), ch = Math.max(0, ih - t - b);
-  const dw = Math.max(0, w - l - r), dh = Math.max(0, h - t - b);
+  const dw = Math.max(0, w - dl - dr), dh = Math.max(0, h - dt - db);
 
   // corners
-  ctx.drawImage(img, 0, 0, l, t, x, y, l, t);
-  ctx.drawImage(img, iw - r, 0, r, t, x + w - r, y, r, t);
-  ctx.drawImage(img, 0, ih - b, l, b, x, y + h - b, l, b);
-  ctx.drawImage(img, iw - r, ih - b, r, b, x + w - r, y + h - b, r, b);
+  ctx.drawImage(img, 0, 0, l, t, x, y, dl, dt);
+  ctx.drawImage(img, iw - r, 0, r, t, x + w - dr, y, dr, dt);
+  ctx.drawImage(img, 0, ih - b, l, b, x, y + h - db, dl, db);
+  ctx.drawImage(img, iw - r, ih - b, r, b, x + w - dr, y + h - db, dr, db);
   // edges
   if (dw > 0) {
-    ctx.drawImage(img, l, 0, cw, t, x + l, y, dw, t);
-    ctx.drawImage(img, l, ih - b, cw, b, x + l, y + h - b, dw, b);
+    ctx.drawImage(img, l, 0, cw, t, x + dl, y, dw, dt);
+    ctx.drawImage(img, l, ih - b, cw, b, x + dl, y + h - db, dw, db);
   }
   if (dh > 0) {
-    ctx.drawImage(img, 0, t, l, ch, x, y + t, l, dh);
-    ctx.drawImage(img, iw - r, t, r, ch, x + w - r, y + t, r, dh);
+    ctx.drawImage(img, 0, t, l, ch, x, y + dt, dl, dh);
+    ctx.drawImage(img, iw - r, t, r, ch, x + w - dr, y + dt, dr, dh);
   }
-  if (dw > 0 && dh > 0) ctx.drawImage(img, l, t, cw, ch, x + l, y + t, dw, dh);
+  if (dw > 0 && dh > 0) ctx.drawImage(img, l, t, cw, ch, x + dl, y + dt, dw, dh);
 }
 
   Object.assign(exports, { drawSprite, roundRect, nineSlice, Renderer });
@@ -1977,6 +1985,10 @@ const {COLORS, DIFFICULTIES, fmtBet, fmtMoney, fmtMult, multiplierFor} = __req("
 
 const FONT = 'system-ui, "Trebuchet MS", "Segoe UI", sans-serif';
 
+/** The GO / COLLECT artwork: its size, and how far in its rounded corner runs.
+ *  Both buttons ship at the same size, so one set of numbers covers them. */
+const BTN = { w: 320, h: 231, corner: 46, maxAspect: 2.2 };
+
 /**
  * The control panel. Immediate-mode: `layout()` rebuilds the rectangles on
  * resize, `update()` turns pointer state into actions, `draw()` paints.
@@ -2035,42 +2047,68 @@ class UI {
    * Rows top to bottom: bet, difficulty, a live status strip, then the buttons.
    */
   _layoutPortrait(w, h) {
-    const u = Math.max(0.62, Math.min(w / 420, h / 760, 1.5));
-    const pad = 18 * u, gap = 11 * u;
-    const rowH = 52 * u, statH = 40 * u, btnH = 88 * u;
+    const m = this._fitPortrait(w, h);
+    const u = m.u;
+    const panelY = h - m.panelH;
 
-    let panelH = pad * 2 + rowH * 2 + statH + btnH + gap * 3.4;
-    panelH = Math.min(panelH, h * 0.48);
-    const panelY = h - panelH;
-
-    this.panel = { x: 8 * u, y: panelY, w: w - 16 * u, h: panelH + 20 * u };
-    this.underlay = { x: 0, y: panelY - 7 * u, w, h: panelH + 7 * u };
+    this.panel = { x: 8 * u, y: panelY, w: w - 16 * u, h: m.panelH + 20 * u };
+    this.underlay = { x: 0, y: panelY - 7 * u, w, h: m.panelH + 7 * u };
     this.u = u;
 
-    const x = pad, innerW = w - pad * 2;
-    let y = panelY + pad;
+    const x = m.pad, innerW = m.innerW;
+    let y = panelY + m.pad;
 
-    this.rects.bet = { x, y, w: innerW, h: rowH };
+    this.rects.bet = { x, y, w: innerW, h: m.rowH };
     const sideW = Math.min(120 * u, innerW * 0.3);
-    this.rects.betMin = { x: x + 6 * u, y: y + 5 * u, w: sideW, h: rowH - 10 * u };
-    this.rects.betMax = { x: x + innerW - 6 * u - sideW, y: y + 5 * u, w: sideW, h: rowH - 10 * u };
-    this.rects.betPlus = { x: w / 2 - 55 * u, y, w: 110 * u, h: rowH };
-    y += rowH + gap;
+    this.rects.betMin = { x: x + 6 * u, y: y + 5 * u, w: sideW, h: m.rowH - 10 * u };
+    this.rects.betMax = { x: x + innerW - 6 * u - sideW, y: y + 5 * u, w: sideW, h: m.rowH - 10 * u };
+    this.rects.betPlus = { x: w / 2 - 55 * u, y, w: 110 * u, h: m.rowH };
+    y += m.rowH + m.gap;
 
-    this.rects.diffCycle = { x, y, w: innerW, h: rowH };
-    y += rowH + gap;
+    this.rects.diffCycle = { x, y, w: innerW, h: m.rowH };
+    y += m.rowH + m.gap;
 
-    this.stat = { x, y, w: innerW, h: statH };
-    y += statH + gap * 1.4;
+    this.stat = { x, y, w: innerW, h: m.statH };
+    y += m.statH + m.gap * 1.4;
 
-    const goW = innerW * 0.56;
-    const goX = x + innerW - goW;
-    this.rects.go = { x: goX, y, w: goW, h: btnH };
-    const cr = Math.min(btnH / 2, (goX - x - 14 * u) / 2);
-    this.rects.collect = {
-      x: x + (goX - x - 14 * u) / 2 - cr + 7 * u,
-      y: y + btnH / 2 - cr, w: cr * 2, h: cr * 2,
+    // Cash out and GO share the last row as a matched pair — they used to be a
+    // small disc beside a button stretched to twice its drawn shape. The pair
+    // is centred, which only shows on a wide screen where the two have hit
+    // their proportions before they run out of room.
+    const pairX = x + (innerW - (m.btnW * 2 + m.btnGap)) / 2;
+    this.rects.collect = { x: pairX, y, w: m.btnW, h: m.btnH };
+    this.rects.go = { x: pairX + m.btnW + m.btnGap, y, w: m.btnW, h: m.btnH };
+  }
+
+  /**
+   * How big everything in the portrait panel wants to be. The panel cannot
+   * claim more than about half the screen, so if the contents ask for more,
+   * shrink `u` until they fit — a smaller panel beats one that crops its own
+   * last row.
+   */
+  _fitPortrait(w, h) {
+    const measure = (u) => {
+      const pad = 18 * u, gap = 11 * u, rowH = 52 * u, statH = 40 * u;
+      const innerW = w - pad * 2;
+      // Half the row each, but never taller than the panel can afford nor
+      // longer than a button should be — a squat window would otherwise stretch
+      // the pair into two bars.
+      const btnGap = 14 * u;
+      let btnW = (innerW - btnGap) / 2;
+      let btnH = btnW * (BTN.h / BTN.w);
+      if (btnH > 104 * u) {
+        btnH = 104 * u;
+        btnW = Math.min(btnW, btnH * BTN.maxAspect);
+      }
+      return { u, pad, gap, rowH, statH, innerW, btnGap, btnW, btnH,
+               panelH: pad * 2 + rowH * 2 + statH + btnH + gap * 3.4 };
     };
+    let m = measure(Math.max(0.62, Math.min(w / 420, h / 760, 1.5)));
+    const room = h * 0.48;
+    for (let i = 0; i < 4 && m.panelH > room; i++) {
+      m = measure(m.u * (room / m.panelH));
+    }
+    return m;
   }
 
   /** Returns an action id (or null) for this frame. */
@@ -2148,7 +2186,7 @@ class UI {
     this._chevron(ctx, r.x + r.w - 32 * u, r.y + r.h / 2, 12 * u, u);
 
     this._statStrip(ctx, game, u);
-    this._roundButton(ctx, this.rects.collect, game, u);
+    this._bigButton(ctx, this.rects.collect, 'collect', game, u);
     this._bigButton(ctx, this.rects.go, 'go', game, u);
   }
 
@@ -2289,68 +2327,28 @@ class UI {
     else if (hover) key = base + 'Hover';
     else key = base + 'Normal';
 
+    // The artwork is one flat rounded rectangle, so stretching it to a shape it
+    // was not drawn at pulls the corners out with it. 9-slicing keeps the corner
+    // round and stretches only the flat middle; the corners themselves scale
+    // with the button's height so the radius stays in proportion.
     const dy = pressed ? r.h * 0.02 : 0;
     ctx.save();
-    ctx.drawImage(this.L.img(key), r.x, r.y + dy, r.w, r.h);
+    nineSlice(ctx, this.L.img(key), r.x, r.y + dy, r.w, r.h,
+      BTN.corner, r.h / BTN.h);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = enabled ? '#ffffff' : 'rgba(255,255,255,0.55)';
     ctx.shadowColor = 'rgba(0,0,0,0.35)';
     ctx.shadowBlur = 4 * u;
-    if (kind === 'go') {
-      ctx.font = `800 ${r.h * 0.30}px ${FONT}`;
-      ctx.fillText('GO', r.x + r.w / 2, r.y + r.h / 2 + dy);
-    } else {
-      const label = fmtMoney(game.cashoutValue);
-      ctx.font = `800 ${this._fitFont(ctx, label + ' USD', r.w * 0.82, r.h * 0.24)}px ${FONT}`;
-      ctx.fillText(label + ' USD', r.x + r.w / 2, r.y + r.h / 2 + dy);
-    }
-    ctx.restore();
-  }
-
-  /**
-   * Portrait's circular cash-out button. It used to show a replay arrow when
-   * idle, which read as a second "start" control sitting next to GO — so it now
-   * says plainly what it is and that there is nothing to take yet.
-   */
-  _roundButton(ctx, r, game, u) {
-    const cx = r.x + r.w / 2, cy = r.y + r.h / 2, rad = r.w / 2;
-    const enabled = game.canCollect;
-    const pressed = this.pressedId === 'collect' && this.hoverId === 'collect';
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(cx, cy, rad, 0, Math.PI * 2);
-    ctx.save();
-    ctx.clip();
-    const key = !enabled ? 'collectInactive'
-      : pressed ? 'collectPressed'
-      : this.hoverId === 'collect' ? 'collectHover' : 'collectNormal';
-    const img = this.L.img(key);
-    const s = (rad * 2) / img.height * 1.04;
-    ctx.drawImage(img, cx - img.width * s / 2, cy - img.height * s / 2,
-      img.width * s, img.height * s);
-    ctx.restore();
-    ctx.strokeStyle = 'rgba(0,0,0,0.28)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = enabled ? '#ffffff' : 'rgba(255,255,255,0.55)';
-    ctx.font = `700 ${rad * 0.23}px ${FONT}`;
-    ctx.letterSpacing = `${rad * 0.02}px`;
-    ctx.fillText('CASH OUT', cx, cy - rad * 0.36);
-    ctx.letterSpacing = '0px';
-    if (enabled) {
-      const label = fmtMoney(game.cashoutValue);
-      ctx.font = `800 ${this._fitFont(ctx, label, rad * 1.5, rad * 0.42)}px ${FONT}`;
-      ctx.fillText(label, cx, cy + rad * 0.06);
-      ctx.font = `700 ${rad * 0.22}px ${FONT}`;
-      ctx.fillText('USD', cx, cy + rad * 0.45);
-    } else {
-      ctx.font = `800 ${rad * 0.46}px ${FONT}`;
-      ctx.fillText('—', cx, cy + rad * 0.14);
-    }
+    // Portrait's status strip already reads the cash-out amount out in full
+    // right above the button, so the button only has to name itself.
+    const label = kind === 'go' ? 'GO'
+      : this.portrait ? 'CASH OUT'
+      : fmtMoney(game.cashoutValue) + ' USD';
+    // GO is one short word and carries the row, so it is set largest.
+    const size = kind === 'go' ? 0.30 : this.portrait ? 0.25 : 0.24;
+    ctx.font = `800 ${this._fitFont(ctx, label, r.w * 0.76, r.h * size)}px ${FONT}`;
+    ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 + dy);
     ctx.restore();
   }
 
