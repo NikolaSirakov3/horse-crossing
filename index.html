@@ -182,6 +182,7 @@ class Input {
     this.justReleased = false;
     this._pressQueued = false;
     this._releaseQueued = false;
+    this._endedOutside = false;  // lifted and left before the frame could look
     this.keys = new Set();
     this.pressedKeys = [];
     this._keyQueue = [];
@@ -200,14 +201,25 @@ class Input {
       this._pressQueued = true;
       canvas.setPointerCapture?.(e.pointerId);
     });
-    const up = (e) => {
+    const up = (e, cancelled) => {
       if (e) pos(e);
-      if (this.pointer.down) this._releaseQueued = true;
+      // A cancelled pointer is one the browser took away mid-gesture. It ends
+      // the press, but it is not a click and must not fire the button.
+      if (this.pointer.down && !cancelled) this._releaseQueued = true;
       this.pointer.down = false;
     };
-    canvas.addEventListener('pointerup', up);
-    canvas.addEventListener('pointercancel', up);
-    canvas.addEventListener('pointerleave', () => { this.pointer.inside = false; this.pointer.down = false; });
+    canvas.addEventListener('pointerup', (e) => up(e, false));
+    canvas.addEventListener('pointercancel', (e) => up(e, true));
+    canvas.addEventListener('pointerleave', () => {
+      this.pointer.down = false;
+      // A touch point stops existing the moment it lifts, so the browser fires
+      // pointerleave straight after pointerup — before the frame that was going
+      // to act on the tap has run. Forgetting where the pointer was would throw
+      // that tap away, which is every tap on a phone. Hold the position until
+      // the frame has had its look.
+      if (this._releaseQueued) this._endedOutside = true;
+      else this.pointer.inside = false;
+    });
 
     window.addEventListener('keydown', (e) => {
       if (e.repeat) return;
@@ -220,6 +232,12 @@ class Input {
 
   /** Call once at the top of every frame. */
   beginFrame() {
+    // The frame that acted on the release has now been and gone, so a pointer
+    // that left as it lifted can finally be forgotten.
+    if (this.justReleased && this._endedOutside) {
+      this.pointer.inside = false;
+      this._endedOutside = false;
+    }
     this.justPressed = this._pressQueued;
     this.justReleased = this._releaseQueued;
     this._pressQueued = false;
@@ -2113,9 +2131,15 @@ class UI {
 
   /** Returns an action id (or null) for this frame. */
   update(input, game) {
+    // Controls nest — MIN, MAX and the +/- keys all sit inside the bet slot —
+    // so the smallest rectangle under the pointer is the one being aimed at.
+    // Taking the first match instead left every one of them unreachable behind
+    // the slab they sit on.
     this.hoverId = null;
+    let smallest = Infinity;
     for (const [id, r] of Object.entries(this.rects)) {
-      if (input.hit(r)) { this.hoverId = id; break; }
+      const area = r.w * r.h;
+      if (area < smallest && input.hit(r)) { smallest = area; this.hoverId = id; }
     }
     if (input.justPressed) this.pressedId = this.hoverId;
     let action = null;
