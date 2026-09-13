@@ -1028,7 +1028,7 @@ class Game {
     this.scene.drawLand(ctx, cam, w);
     this.scene.drawStartShore(ctx, cam);
     if (Number.isFinite(n)) {
-      this.scene.drawFinishShore(ctx, cam, this.stones.finishShore(n).x - 100, w);
+      this.scene.drawFinishShore(ctx, cam, this.stones.finishShore(n).x - 100);
     }
     this.stones.drawStones(ctx, cam, w, 0, lastStone);
 
@@ -2272,7 +2272,7 @@ class IntroStage {
     this.scene.drawClouds(ctx, cam, w);
     this.scene.drawLand(ctx, cam, w);
     this.scene.drawStartShore(ctx, cam);
-    this.scene.drawFinishShore(ctx, cam, this.stones.finishShore(DIFF.stones).x - 100, w);
+    this.scene.drawFinishShore(ctx, cam, this.stones.finishShore(DIFF.stones).x - 100);
     this.stones.drawStones(ctx, cam, w, 0, DIFF.stones - 1);
     this.horse.draw(ctx, cam);
     this.scene.drawRiver(ctx, cam, w, h);
@@ -2513,23 +2513,19 @@ class Scene {
   }
 
   /**
-   * The far bank. Mirrored copies of the coast tile march right until they run
-   * off the edge of the view, each one covering the previous tile's cut edge.
+   * The far bank is a compact landing island rather than a strip that grows to
+   * the edge of the viewport. The coast plus its foliage occupy about 309
+   * world pixels, staying inside three widths of the widest 108px stone.
    */
-  drawFinishShore(ctx, cam, worldX, viewW) {
+  drawFinishShore(ctx, cam, worldX) {
     const coast = this.L.img('coast');
     const fol = this.L.img('foliage');
     const y = WORLD.waterY - 70;
-    const right = cam.x + viewW / cam.zoom + 220;
-    for (let x = worldX; x < right; x += 168) {
-      Scene.blit(ctx, cam, coast, x, y + ((x - worldX) % 336 ? -5 : 0),
-        coast.width, coast.height, 1, 1, true);
-    }
+    Scene.blit(ctx, cam, coast, worldX, y,
+      coast.width, coast.height, 1, 1, true);
     const fs = 0.45;
     Scene.blit(ctx, cam, fol, worldX + 96, WORLD.waterY - 196 * fs,
       fol.width * fs, fol.height * fs, 1, 1);
-    Scene.blit(ctx, cam, fol, worldX + 430, WORLD.waterY - 150 * fs,
-      fol.width * fs * 0.75, fol.height * fs * 0.75, 1, 0.9);
   }
 }
 
