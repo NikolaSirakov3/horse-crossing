@@ -847,7 +847,13 @@ class Game {
 
   _camTargetX() {
     const viewW = this.r.width / this.cam.zoom;
-    return Math.max(WORLD.camMinX, this.horse.x - viewW * VIEW.horseAnchor);
+    const followX = this.horse.x - viewW * VIEW.horseAnchor;
+    if (!Number.isFinite(this.stoneCount)) return Math.max(WORLD.camMinX, followX);
+
+    const finishX = this.stones.finishShore(this.stoneCount).x;
+    const finishRight = finishX - WORLD.finishShoreLeft + WORLD.finishShoreSpan;
+    const finalCameraX = finishRight - viewW;
+    return Math.max(WORLD.camMinX, Math.min(followX, finalCameraX));
   }
 
   // --- round flow --------------------------------------------------------
@@ -1028,7 +1034,8 @@ class Game {
     this.scene.drawLand(ctx, cam, w);
     this.scene.drawStartShore(ctx, cam);
     if (Number.isFinite(n)) {
-      this.scene.drawFinishShore(ctx, cam, this.stones.finishShore(n).x - 100);
+      this.scene.drawFinishShore(ctx, cam,
+        this.stones.finishShore(n).x - WORLD.finishShoreLeft);
     }
     this.stones.drawStones(ctx, cam, w, 0, lastStone);
 
@@ -1248,6 +1255,8 @@ const STATIC_FALLBACK = Object.freeze({ width: 82, height: 211 });
 const FALL_AIR_TIME = 0.55;
 const IMPACT_TIME = 0.34;
 const SINK_TIME = 1.05;
+const IMPACT_DEPTH = 140;
+const SINK_DEPTH = 260;
 const CELEBRATE_TIME = 2.2;
 
 const HorseState = {
@@ -1558,8 +1567,10 @@ class Horse {
 
   _impact() {
     const k = clamp(this.t / IMPACT_TIME, 0, 1);
-    const rebound = Math.sin(k * Math.PI) * 7 * (1 - k * 0.45);
-    this.height = this.y - (WORLD.waterY + 8 - rebound);
+    // Keep the first splash pose at the surface, then carry every following
+    // pose farther under the opaque river instead of rebounding above it.
+    const depth = lerp(8, IMPACT_DEPTH, ease.inQuad(k));
+    this.height = this.y - (WORLD.waterY + depth);
     this.rotation = lerp(0.92, 0.24, ease.outQuad(k));
     if (k >= 1) {
       this.state = HorseState.SINKING;
@@ -1572,10 +1583,11 @@ class Horse {
     });
   }
 
-  _sinking(dt) {
+  _sinking() {
     const k = clamp(this.t / SINK_TIME, 0, 1);
-    this.height -= 30 * dt;
-    this.rotation = damp(this.rotation, 0.06, 0.25, dt);
+    const depth = lerp(IMPACT_DEPTH, SINK_DEPTH, ease.outQuad(k));
+    this.height = this.y - (WORLD.waterY + depth);
+    this.rotation = lerp(0.24, 0.06, ease.outQuad(k));
     this.alpha = 1 - ease.inQuad(k);
     const f = this.t * 7;
     return pose({
@@ -2272,7 +2284,8 @@ class IntroStage {
     this.scene.drawClouds(ctx, cam, w);
     this.scene.drawLand(ctx, cam, w);
     this.scene.drawStartShore(ctx, cam);
-    this.scene.drawFinishShore(ctx, cam, this.stones.finishShore(DIFF.stones).x - 100);
+    this.scene.drawFinishShore(ctx, cam,
+      this.stones.finishShore(DIFF.stones).x - WORLD.finishShoreLeft);
     this.stones.drawStones(ctx, cam, w, 0, DIFF.stones - 1);
     this.horse.draw(ctx, cam);
     this.scene.drawRiver(ctx, cam, w, h);
@@ -3103,6 +3116,11 @@ const WORLD = {
   shoreArtX: 46,          // left edge of the near bank's coast tile
   /** How far past the last stone the far bank's standing point sits. */
   shoreGap: 152,
+  /** Compact far-bank bounds relative to its landing point. The camera uses
+   *  the same right edge as the artwork, so it never reveals empty world past
+   *  the end of a finite crossing. */
+  finishShoreLeft: 100,
+  finishShoreSpan: 308.85,
   /** The camera never pans left of this, so the near bank stays framed. */
   camMinX: 30,
   /** Multiplier ribbons float here, just under the stones. */
