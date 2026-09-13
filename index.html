@@ -798,6 +798,7 @@ class Game {
     this.shake = 0;
     this.resetTimer = 0;
     this.jumpSerial = 0;          // visual variation only; never consumes outcome RNG
+    this.testOutcome = null;      // null = real client RNG; boolean = deterministic TEST override
 
     this.cam = renderer.camera;
     this.horse.placeOn(this.platform(0));
@@ -821,7 +822,11 @@ class Game {
   get multiplier() { return this.step > 0 ? multiplierFor(this.difficulty, this.step) : 1; }
   get cashoutValue() { return this.step > 0 ? this.bet * this.multiplier : this.bet; }
   get canChangeBet() { return this.phase === Phase.IDLE; }
-  get canGo() { return this.phase === Phase.IDLE ? this.balance >= this.bet : this.phase === Phase.READY; }
+  get canReplay() { return this.phase === Phase.WON && this.resetTimer <= 0; }
+  get canGo() {
+    if (this.canReplay) return true;
+    return this.phase === Phase.IDLE ? this.balance >= this.bet : this.phase === Phase.READY;
+  }
   get canCollect() { return this.phase === Phase.READY && this.step > 0; }
 
   layout() {
@@ -848,6 +853,11 @@ class Game {
   // --- round flow --------------------------------------------------------
 
   go() {
+    // A completed crossing stays on the far shore until the player explicitly
+    // asks to play again. The first GO returns to the setup state; it does not
+    // immediately spend another bet or launch another jump.
+    if (this.canReplay) { this._resetRound(); return; }
+
     if (this.phase === Phase.IDLE) {
       if (this.balance < this.bet) { this.hud.say('Not enough balance'); return; }
       this.balance -= this.bet;
@@ -859,7 +869,9 @@ class Game {
 
     const from = this.platform(this.step);
     const to = this.platform(this.step + 1);
-    const survives = this.rand() < this.difficulty.p;
+    // Outcomes are decided locally in this standalone build. TEST links may
+    // provide a fixed boolean so either animation can be reproduced reliably.
+    const survives = this.testOutcome ?? (this.rand() < this.difficulty.p);
     const jumpVariant = jumpVariantFor(this.jumpSerial++);
     this._pendingWin = survives;
     this.phase = Phase.HOPPING;
@@ -892,11 +904,11 @@ class Game {
       const payout = this.bet * this.multiplier;
       this.balance += payout;
       this.phase = Phase.WON;
-      this.resetTimer = 2.6;
+      this.resetTimer = 0;
       this.sfx.coin();
       this.horse.cheer();
       this.fx.float(this.horse.x, this.horse.headY - 120, '+' + fmtMoney(payout), '#8ce07a', 46);
-      this.hud.say(`Crossed the river! ${fmtMult(this.multiplier)}`);
+      this.hud.say(`Crossed the river! ${fmtMult(this.multiplier)} — GO to play again`, 4000);
     }
   }
 
@@ -912,6 +924,7 @@ class Game {
   _resetRound() {
     this.step = 0;
     this.phase = Phase.IDLE;
+    this.resetTimer = 0;
     this.fx.clear();
     this.horse.placeOn(this.platform(0));
     this.cam.x = this._camTargetX();
@@ -3322,6 +3335,9 @@ async function start() {
   });
 
   const game = new Game(renderer, input, loader, sfx);
+  const testOutcome = new URLSearchParams(window.location.search).get('testOutcome');
+  if (testOutcome === 'fall') game.testOutcome = false;
+  if (testOutcome === 'win') game.testOutcome = true;
 
   // Audio can only be created inside a user gesture.
   const unlock = () => sfx.unlock();
