@@ -42,7 +42,7 @@
   }
   #boot-logo {
     position: absolute; z-index: 2; left: 50%; bottom: -3%;
-    width: min(210%, 90vw); max-width: none; height: auto; transform: translateX(-50%);
+    width: min(189%, 90vw); max-width: none; height: auto; transform: translateX(-50%);
     filter: drop-shadow(0 4px 5px rgba(30, 16, 5, .35));
   }
   #bar {
@@ -64,6 +64,9 @@
     color: #fff; max-width: 80vw; padding: 8px 12px; text-align: center;
     font-size: 13px; line-height: 1.5; background: rgba(100, 0, 0, .68);
     border-radius: 8px;
+  }
+  @media (orientation: portrait) {
+    #boot-logo { bottom: 2%; }
   }
   @media (prefers-reduced-motion: reduce) {
     #boot { transition: none; }
